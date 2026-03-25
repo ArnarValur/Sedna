@@ -1,254 +1,150 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
-import 'package:http/http.dart' as http;
-import 'package:html/parser.dart' as parser;
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'screens/home_screen.dart';
+import 'screens/clip_screen.dart';
+import 'services/drive_service.dart';
 
-// TODO: Paste your Gemini API Key here to test the summarization!
-const String geminiApiKey = 'REDACTED';
+// ┌─────────────────────────────────────────────────────────────────┐
+// │  CONFIGURATION                                                  │
+// │  Set your Google Shared Drive folder ID here.                   │
+// │  Find it in the URL when viewing the folder in Google Drive:    │
+// │  https://drive.google.com/drive/folders/<THIS_IS_THE_ID>        │
+// └─────────────────────────────────────────────────────────────────┘
+const String targetFolderId = '';  // TODO: Paste your folder ID here
 
+/// main.dart — The entry point of the Flutter application.
+///
+/// KEY FLUTTER CONCEPTS:
+///
+/// 1. runApp(): Takes a Widget and makes it the root of the widget tree.
+///    Everything you see on screen is a Widget — buttons, text, layout,
+///    even the app itself.
+///
+/// 2. MaterialApp: The top-level widget that provides Material Design
+///    styling, navigation routing, and theme configuration.
+///
+/// 3. ThemeData: Defines the visual appearance of the entire app.
+///    Material 3 uses a "ColorScheme" generated from a seed color —
+///    it automatically creates a harmonious palette.
+///
+/// 4. Widget Tree: Flutter builds UIs as a tree of nested widgets.
+///    MaterialApp → HomeScreen → Scaffold → Column → [children]
+///    When we navigate to ClipScreen, Flutter pushes it onto a
+///    navigation stack on top of HomeScreen.
 void main() {
-  runApp(const SecondMobileBrainApp());
+  runApp(const SecondBrainApp());
 }
 
-class SecondMobileBrainApp extends StatelessWidget {
-  const SecondMobileBrainApp({super.key});
+class SecondBrainApp extends StatefulWidget {
+  const SecondBrainApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Second Brain',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const IntentReceiverScreen(),
-    );
-  }
+  State<SecondBrainApp> createState() => _SecondBrainAppState();
 }
 
-class IntentReceiverScreen extends StatefulWidget {
-  const IntentReceiverScreen({super.key});
+class _SecondBrainAppState extends State<SecondBrainApp> {
+  /// We create ONE DriveService instance and pass it down to all screens.
+  /// This pattern is called "lifting state up" — the auth state lives at the
+  /// top of the widget tree and is shared with children via constructor parameters.
+  final DriveService _driveService = DriveService();
 
-  @override
-  State<IntentReceiverScreen> createState() => _IntentReceiverScreenState();
-}
+  /// GlobalKey gives us access to the Navigator from anywhere in the app.
+  /// We need this to push the ClipScreen when a share intent arrives —
+  /// even when the share happens outside of a normal user interaction.
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
-class _IntentReceiverScreenState extends State<IntentReceiverScreen> {
-  late StreamSubscription _intentDataStreamSubscription;
-  String _sharedText = "";
-
-  bool _isLoading = false;
-  String _summary = "";
+  StreamSubscription? _intentSubscription;
 
   @override
   void initState() {
     super.initState();
-
-    // Listen to media/text shared while the app is in memory.
-    _intentDataStreamSubscription = ReceiveSharingIntent.instance
-        .getMediaStream()
-        .listen(
-          (value) {
-            _handleIncomingShare(value);
-          },
-          onError: (err) {
-            print("Stream Error: $err");
-          },
-        );
-
-    // Handle intent when the app is completely closed and launched via a share action.
-    ReceiveSharingIntent.instance.getInitialMedia().then((value) {
-      _handleIncomingShare(value);
-    });
+    _setupShareListener();
   }
 
-  void _handleIncomingShare(List<SharedMediaFile> files) {
-    if (files.isNotEmpty) {
-      // Extract the raw text/URL shared to the app
-      final rawInput = files.map((f) => f.path).join("\n");
+  /// Sets up listeners for incoming share intents.
+  ///
+  /// There are TWO scenarios to handle:
+  /// 1. App is already running → getMediaStream() fires
+  /// 2. App was closed and launched via share → getInitialMedia() fires
+  ///
+  /// On Linux/desktop, share intents don't exist, so we skip this.
+  void _setupShareListener() {
+    // Share intent only works on mobile platforms
+    if (Platform.isAndroid || Platform.isIOS) {
+      // Scenario 1: App is in memory, user shares while it's running
+      _intentSubscription = ReceiveSharingIntent.instance
+          .getMediaStream()
+          .listen(
+            (files) => _handleIncomingShare(files),
+            onError: (err) => debugPrint('Share stream error: $err'),
+          );
 
-      setState(() {
-        _sharedText = rawInput;
+      // Scenario 2: App was closed, launched via share action
+      ReceiveSharingIntent.instance.getInitialMedia().then((files) {
+        _handleIncomingShare(files);
       });
-
-      // Attempt to extract a URL from the string.
-      // (When users share from Chrome, the intent text often contains the URL).
-      final urlRegExp = RegExp(r"(https?:\/\/[^\s]+)");
-      final match = urlRegExp.firstMatch(rawInput);
-
-      if (match != null) {
-        _processUrl(match.group(0)!);
-      } else {
-        setState(() {
-          _summary = "No valid URL found in the shared text.";
-        });
-      }
     }
   }
 
-  Future<void> _processUrl(String url) async {
-    setState(() {
-      _isLoading = true;
-      _summary = "";
-    });
+  /// Extracts a URL from the shared data and navigates to the ClipScreen.
+  void _handleIncomingShare(List<SharedMediaFile> files) {
+    if (files.isEmpty) return;
 
-    try {
-      // 1. Fetch HTML
-      final response = await http.get(Uri.parse(url));
+    // The shared text typically contains the URL
+    final raw = files.map((f) => f.path).join('\n');
 
-      // 2. Extract Text using HTML parser
-      final document = parser.parse(response.body);
-      final rawText = document.body?.text ?? '';
+    // Extract a URL using regex
+    final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(raw);
 
-      // Basic cleanup of excessive whitespace for the AI prompt
-      final cleanText = rawText.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (urlMatch != null) {
+      final url = urlMatch.group(0)!;
 
-      // 3. Summarize with Gemini
-      if (geminiApiKey == 'YOUR_GEMINI_API_KEY') {
-        throw Exception(
-          "Please add your Gemini API key at the top of lib/main.dart!",
-        );
-      }
-
-      // We use gemini-1.5-flash as it is the fastest model for text tasks
-      final model = GenerativeModel(
-        model: 'gemini-1.5-flash',
-        apiKey: geminiApiKey,
+      // Navigate to ClipScreen with the extracted URL
+      // We use pushReplacement so "back" goes to home, not a blank screen
+      _navigatorKey.currentState?.push(
+        MaterialPageRoute(
+          builder: (_) => ClipScreen(
+            url: url,
+            driveService: _driveService,
+            targetFolderId: targetFolderId,
+          ),
+        ),
       );
-
-      final prompt =
-          'You are a highly capable summarizer for a Second Brain app. Please summarize the following article/content concisely and structure the key takeaways in bullet points:\n\n$cleanText';
-      final content = [Content.text(prompt)];
-      final aiResponse = await model.generateContent(content);
-
-      setState(() {
-        _summary = aiResponse.text ?? "Could not generate summary.";
-      });
-    } catch (e) {
-      setState(() {
-        _summary = "Error processing link: $e";
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
     }
   }
 
   @override
   void dispose() {
-    _intentDataStreamSubscription.cancel();
+    _intentSubscription?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sedna | Phase 3'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                const Icon(
-                  Icons.auto_awesome,
-                  size: 64,
-                  color: Colors.deepPurple,
-                ),
-                const SizedBox(height: 24),
+    return MaterialApp(
+      navigatorKey: _navigatorKey,
+      title: 'Second Brain',
 
-                if (_sharedText.isEmpty)
-                  const Text(
-                    'Share a URL from another app to generate a summary!',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
-                  )
-                else
-                  Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          "Shared URL: $_sharedText",
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.black54,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-
-                      if (_isLoading)
-                        const Column(
-                          children: [
-                            CircularProgressIndicator(),
-                            SizedBox(height: 16),
-                            Text("Reading and summarizing with Gemini..."),
-                          ],
-                        )
-                      else if (_summary.isNotEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.deepPurple.withOpacity(0.05),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: Colors.deepPurple.withOpacity(0.2),
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Row(
-                                children: [
-                                  Icon(
-                                    Icons.auto_awesome_mosaic,
-                                    color: Colors.deepPurple,
-                                    size: 20,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    "AI Summary",
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.deepPurple,
-                                      fontSize: 18,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Divider(),
-                              const SizedBox(height: 8),
-                              Text(
-                                _summary,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  height: 1.4,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-              ],
-            ),
-          ),
+      // ── Theme Configuration ──────────────────────────────────
+      // Material 3 dark theme with a teal seed color.
+      // ColorScheme.fromSeed automatically generates:
+      // - primary, secondary, tertiary colors
+      // - surface, background, error colors
+      // - All their "on" variants (text colors that contrast properly)
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.teal,
+          brightness: Brightness.dark,
         ),
+        useMaterial3: true,
       ),
+
+      home: HomeScreen(driveService: _driveService),
+
+      // Debug banner off — cleaner during development
+      debugShowCheckedModeBanner: false,
     );
   }
 }
