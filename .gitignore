@@ -43,4 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-.docs/client_secret_717204907321-liec1a0onn8mtsv8je8vlh7m8d13d9g3.apps.googleusercontent.com.json
+
+# Project-specific
+.docs/
+conductor/
+.vscode/
