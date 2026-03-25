@@ -12,7 +12,7 @@ import 'services/drive_service.dart';
 // │  Find it in the URL when viewing the folder in Google Drive:    │
 // │  https://drive.google.com/drive/folders/<THIS_IS_THE_ID>        │
 // └─────────────────────────────────────────────────────────────────┘
-const String targetFolderId = '1NbKQ-2uMYjs9Nu66Fmj1syxDBME0tWFa';
+const String targetFolderId = '';  // Your Google Drive folder ID here
 
 /// main.dart — The entry point of the Flutter application.
 ///

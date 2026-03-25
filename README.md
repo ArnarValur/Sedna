@@ -11,16 +11,18 @@ Built with Flutter. Inspired by [Obsidian Web Clipper](https://github.com/obsidi
 3. **Converts content to Markdown** — preserves headings, links, lists, code blocks, tables (powered by [html2md](https://pub.dev/packages/html2md))
 4. **Uploads to Google Drive** — drops the `.md` file into your Obsidian vault's Shared Drive folder
 
-The output matches [Obsidian Clipper's](https://github.com/obsidianmd/obsidian-clipper) YAML frontmatter format.
+The output matches (almost) [Obsidian Clipper's](https://github.com/obsidianmd/obsidian-clipper) YAML frontmatter format.
 
 ## Setup
 
 ### Prerequisites
+
 - Flutter SDK
 - Android device with USB debugging enabled
 - Google Cloud project with Drive API enabled + Android OAuth client
 
 ### Configuration
+
 1. Create an Android OAuth client in GCP with your app's package name + SHA-1
 2. Set your Drive folder ID in `lib/main.dart`:
    ```dart
