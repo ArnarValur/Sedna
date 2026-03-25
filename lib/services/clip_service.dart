@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart';
+import 'package:html2md/html2md.dart' as html2md;
 import '../models/clip_data.dart';
 
 /// ClipService — the engine that fetches a URL and extracts page metadata.
@@ -12,6 +13,14 @@ import '../models/clip_data.dart';
 ///    - OpenGraph (og:) tags first (most reliable for articles)
 ///    - Standard `<meta>` tags as fallback
 ///    - HTML elements (`<title>`, `<body>`) as last resort
+/// 4. Convert the article HTML → Markdown (preserving structure)
+///
+/// CONTENT EXTRACTION STRATEGY (inspired by Obsidian Clipper / defuddle):
+/// - Find the main content element (`<article>`, `<main>`, or `<body>`)
+/// - Strip noise: scripts, styles, nav, footer, ads, social buttons,
+///   hidden elements, cookie banners, and other non-content clutter
+/// - Convert the cleaned HTML → Markdown using html2md, which preserves
+///   headings, links, lists, bold/italic, code blocks, and tables
 ///
 /// KEY FLUTTER/DART CONCEPTS:
 /// - async/await: Every network call is asynchronous. We use `await` to
@@ -95,11 +104,15 @@ class ClipService {
         '';
   }
 
-  /// Content extraction — gets the main body text.
+  /// Content extraction — the main upgrade over raw text dumping.
   ///
-  /// Strategy: Look for `<article>` first (semantic HTML for articles),
-  /// then fall back to `<body>`. Strip out scripts, styles, and nav
-  /// elements that would pollute the content.
+  /// Strategy (inspired by Obsidian Clipper's defuddle library):
+  /// 1. Find the main content element (`<article>` → `<main>` → `<body>`)
+  /// 2. Strip noise elements that pollute the content
+  /// 3. Convert cleaned HTML → Markdown using html2md
+  ///
+  /// This preserves headings, links, lists, bold/italic, code blocks,
+  /// and tables — making the output actually useful in Obsidian.
   String _extractContent(Document doc) {
     // Try <article> first — most news sites and blogs use this
     Element? contentElement = doc.querySelector('article');
@@ -110,15 +123,56 @@ class ClipService {
 
     if (contentElement == null) return '';
 
-    // Remove noise elements before extracting text
-    // querySelectorAll returns a List — we iterate and remove each one
-    for (final tag in ['script', 'style', 'nav', 'footer', 'header', 'aside']) {
+    // ─── Noise Removal (inspired by defuddle) ────────────────────
+    // Remove elements that are never useful content.
+    // Tags: structural noise
+    final noiseTags = [
+      'script', 'style', 'nav', 'footer', 'header', 'aside',
+      'iframe', 'noscript', 'svg',
+    ];
+    for (final tag in noiseTags) {
       contentElement.querySelectorAll(tag).forEach((e) => e.remove());
     }
 
-    // Get the remaining text and clean up excessive whitespace
-    final rawText = contentElement.text;
-    return rawText.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // CSS selectors: ad blocks, social buttons, cookie banners, etc.
+    // These are common patterns across news sites and blogs.
+    final noiseSelectors = [
+      '[class*="social"]', '[class*="share"]', '[class*="sharing"]',
+      '[class*="sidebar"]', '[class*="widget"]', '[class*="related"]',
+      '[class*="comment"]', '[class*="newsletter"]', '[class*="subscribe"]',
+      '[class*="cookie"]', '[class*="consent"]', '[class*="banner"]',
+      '[class*="popup"]', '[class*="modal"]', '[class*="overlay"]',
+      '[class*="advertisement"]', '[class*="sponsor"]',
+      '[id*="sidebar"]', '[id*="comment"]', '[id*="footer"]',
+      '[role="complementary"]', '[role="navigation"]',
+      '[aria-hidden="true"]',
+    ];
+    for (final selector in noiseSelectors) {
+      try {
+        contentElement.querySelectorAll(selector).forEach((e) => e.remove());
+      } catch (_) {
+        // Some selectors may not be supported — skip them
+      }
+    }
+
+    // ─── HTML → Markdown Conversion ──────────────────────────────
+    // Get the cleaned HTML and convert to proper Markdown.
+    // html2md handles: headings, links, lists, bold, italic,
+    // code blocks, blockquotes, images, and tables.
+    final cleanedHtml = contentElement.innerHtml;
+    final markdown = html2md.convert(
+      cleanedHtml,
+      styleOptions: {
+        'headingStyle': 'atx',
+        'codeBlockStyle': 'fenced',
+      },
+      ignore: ['button', 'input', 'form', 'select'],
+    );
+
+    // Clean up excessive blank lines (more than 2 consecutive → 2)
+    return markdown
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .trim();
   }
 
   // ─── Helper Methods ───────────────────────────────────────────

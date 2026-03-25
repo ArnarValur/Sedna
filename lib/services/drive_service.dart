@@ -23,7 +23,9 @@ import 'dart:convert';
 ///   files that our app created, but NOT read the user's other files.
 ///   This is the principle of least privilege.
 class DriveService {
-  // Google Sign-In instance with Drive file scope
+  // Google Sign-In instance with Drive file scope.
+  // The Android OAuth client is matched automatically by package name + SHA-1
+  // from the GCP console — no client ID needed in code.
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       drive.DriveApi.driveFileScope,
